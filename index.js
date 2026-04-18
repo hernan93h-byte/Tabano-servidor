@@ -9,7 +9,6 @@ if (!globalThis.crypto) globalThis.crypto = webcrypto;
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const admin = require('firebase-admin');
-const qrcode = require('qrcode-terminal');
 
 // ── Firebase Admin ──────────────────────────────────────────
 const serviceAccount = {
@@ -32,37 +31,27 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// ── Estado ──────────────────────────────────────────────────
 let sock = null;
 let waListo = false;
 
-// ── Conectar WhatsApp ────────────────────────────────────────
 async function conectarWA() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
 
   sock = makeWASocket({
     auth: state,
-    printQRInTerminal: false,
+    printQRInTerminal: true,
   });
 
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      console.log('══════════════════════════════════════');
-      console.log('ESCANEA ESTE QR CON WHATSAPP:');
-      console.log('══════════════════════════════════════');
-      qrcode.generate(qr, { small: true });
-    }
+    const { connection, lastDisconnect } = update;
 
     if (connection === 'close') {
       waListo = false;
       const shouldReconnect = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
         : true;
-
       console.log('Conexión cerrada. Reconectando:', shouldReconnect);
       if (shouldReconnect) {
         setTimeout(conectarWA, 5000);
@@ -75,7 +64,6 @@ async function conectarWA() {
   });
 }
 
-// ── Motor principal ──────────────────────────────────────────
 function iniciarMotor() {
   console.log('🚀 Motor de cola iniciado');
   setInterval(procesarCola, 60 * 1000);
@@ -99,16 +87,13 @@ async function procesarCola() {
       .get();
 
     if (snapshot.empty) {
-      console.log('📭 Cola vacía o sin mensajes para ahora');
+      console.log('📭 Cola vacía');
       return;
     }
 
-    console.log(`📬 Encontré ${snapshot.size} mensajes para enviar`);
-
     for (const docSnap of snapshot.docs) {
       await procesarMensaje(docSnap);
-      const delay = 30000 + Math.random() * 60000;
-      await esperar(delay);
+      await esperar(30000 + Math.random() * 60000);
     }
 
   } catch (err) {
@@ -120,11 +105,7 @@ async function procesarMensaje(docSnap) {
   const data = docSnap.data();
   const docId = docSnap.id;
 
-  console.log(`📤 Enviando a ${data.clienteNombre} (${data.clienteWA})`);
-
-  await db.collection('tabano-difusion-cola').doc(docId).update({
-    estado: 'enviando'
-  });
+  await db.collection('tabano-difusion-cola').doc(docId).update({ estado: 'enviando' });
 
   try {
     const numero = data.clienteWA.replace(/\D/g, '') + '@s.whatsapp.net';
@@ -144,10 +125,10 @@ async function procesarMensaje(docSnap) {
     });
 
     await db.collection('tabano-difusion-cola').doc(docId).delete();
-    console.log(`✅ Enviado OK a ${data.clienteNombre}`);
+    console.log('✅ Enviado OK a', data.clienteNombre);
 
   } catch (err) {
-    console.error(`❌ Error enviando a ${data.clienteNombre}:`, err.message);
+    console.error('❌ Error enviando:', err.message);
     await db.collection('tabano-difusion-cola').doc(docId).update({
       estado: 'error',
       intentos: (data.intentos || 0) + 1,
@@ -160,6 +141,5 @@ function esperar(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ── Arrancar ─────────────────────────────────────────────────
 console.log('🔄 Iniciando servidor Hache Barber...');
 conectarWA();
