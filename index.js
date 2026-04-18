@@ -1,10 +1,11 @@
 // ============================================================
-// SERVIDOR HACHE BARBER — Motor de WhatsApp
+// SERVIDOR HACHE BARBER — Motor de WhatsApp con Baileys
 // ============================================================
 
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const admin = require('firebase-admin');
+const qrcode = require('qrcode-terminal');
 
 // ── Firebase Admin ──────────────────────────────────────────
 const serviceAccount = {
@@ -27,50 +28,48 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// ── Estado del cliente WhatsApp ──────────────────────────────
+// ── Estado ──────────────────────────────────────────────────
+let sock = null;
 let waListo = false;
 
-// ── Cliente WhatsApp ─────────────────────────────────────────
-const client = new Client({
-  authStrategy: new LocalAuth({ clientId: 'hache-barber' }),
-  puppeteer: {
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-gpu',
-      '--disable-extensions',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding'
-    ]
-  }
-});
+// ── Conectar WhatsApp ────────────────────────────────────────
+async function conectarWA() {
+  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
 
-client.on('qr', (qr) => {
-  console.log('══════════════════════════════════════');
-  console.log('ESCANEA ESTE QR CON WHATSAPP:');
-  console.log('══════════════════════════════════════');
-  qrcode.generate(qr, { small: true });
-});
+  sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false,
+  });
 
-client.on('ready', () => {
-  waListo = true;
-  console.log('✅ WhatsApp conectado y listo');
-  iniciarMotor();
-});
+  sock.ev.on('creds.update', saveCreds);
 
-client.on('disconnected', (reason) => {
-  waListo = false;
-  console.log('❌ WhatsApp desconectado:', reason);
-});
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect, qr } = update;
 
-client.initialize();
+    if (qr) {
+      console.log('══════════════════════════════════════');
+      console.log('ESCANEA ESTE QR CON WHATSAPP:');
+      console.log('══════════════════════════════════════');
+      qrcode.generate(qr, { small: true });
+    }
+
+    if (connection === 'close') {
+      waListo = false;
+      const shouldReconnect = (lastDisconnect?.error instanceof Boom)
+        ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
+        : true;
+
+      console.log('Conexión cerrada. Reconectando:', shouldReconnect);
+      if (shouldReconnect) {
+        setTimeout(conectarWA, 5000);
+      }
+    } else if (connection === 'open') {
+      waListo = true;
+      console.log('✅ WhatsApp conectado y listo');
+      iniciarMotor();
+    }
+  });
+}
 
 // ── Motor principal ──────────────────────────────────────────
 function iniciarMotor() {
@@ -124,8 +123,8 @@ async function procesarMensaje(docSnap) {
   });
 
   try {
-    const numero = data.clienteWA.replace(/\D/g, '') + '@c.us';
-    await client.sendMessage(numero, data.textoFinal);
+    const numero = data.clienteWA.replace(/\D/g, '') + '@s.whatsapp.net';
+    await sock.sendMessage(numero, { text: data.textoFinal });
 
     await db.collection('tabano-difusion-historial').add({
       clienteId: data.clienteId || '',
@@ -157,4 +156,6 @@ function esperar(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ── Arrancar ─────────────────────────────────────────────────
 console.log('🔄 Iniciando servidor Hache Barber...');
+conectarWA();
