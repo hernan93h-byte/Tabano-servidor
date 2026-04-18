@@ -2,6 +2,10 @@
 // SERVIDOR HACHE BARBER — Motor de WhatsApp con Baileys
 // ============================================================
 
+// Fix para Node 18
+const { webcrypto } = require('crypto');
+if (!globalThis.crypto) globalThis.crypto = webcrypto;
+
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const admin = require('firebase-admin');
