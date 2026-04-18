@@ -1,5 +1,5 @@
 // ============================================================
-// SERVIDOR HACHE BARBER — Motor de WhatsApp
+// SERVIDOR HACHE BARBER — Motor de WhatsApp con Pairing Code
 // ============================================================
 
 const { webcrypto } = require('crypto');
@@ -10,7 +10,6 @@ const { useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore } =
 const { Boom } = require('@hapi/boom');
 const admin = require('firebase-admin');
 const http = require('http');
-const qrcode = require('qrcode');
 
 // ── Firebase ─────────────────────────────────────────────────
 const serviceAccount = {
@@ -33,44 +32,32 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// ── Estado global ────────────────────────────────────────────
 let sock = null;
 let waListo = false;
-let qrActual = null;
-let qrImagenBase64 = null;
+let codigoPairing = null;
 
-// ── Servidor HTTP para mostrar el QR ────────────────────────
-const server = http.createServer(async (req, res) => {
-  if (req.url === '/qr') {
-    if (qrImagenBase64) {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`
-        <html>
-        <head><title>Hache Barber QR</title></head>
-        <body style="background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;">
-          <h2 style="color:#fff;font-family:sans-serif;">Escaneá este QR con WhatsApp</h2>
-          <img src="${qrImagenBase64}" style="width:300px;height:300px"/>
-          <p style="color:#aaa;font-family:sans-serif;">Abrí WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
-        </body>
-        </html>
-      `);
-    } else if (waListo) {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end('<html><body style="background:#000;color:#0f0;font-family:sans-serif;text-align:center;padding-top:100px"><h1>✅ WhatsApp ya está conectado</h1></body></html>');
-    } else {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end('<html><body style="background:#000;color:#fff;font-family:sans-serif;text-align:center;padding-top:100px"><h1>⏳ Esperando QR... Recargá en unos segundos</h1></body></html>');
-    }
+// Número del chip (sin + y sin espacios)
+const NUMERO_CHIP = '5492215869334';
+
+// ── Servidor HTTP ────────────────────────────────────────────
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  if (waListo) {
+    res.end('<html><body style="background:#000;color:#0f0;font-family:sans-serif;text-align:center;padding-top:100px"><h1>✅ WhatsApp conectado</h1></body></html>');
+  } else if (codigoPairing) {
+    res.end(`<html><body style="background:#000;color:#fff;font-family:sans-serif;text-align:center;padding-top:100px">
+      <h2>Código para vincular WhatsApp:</h2>
+      <h1 style="color:#ff0;font-size:80px;letter-spacing:20px">${codigoPairing}</h1>
+      <p>Abrí WhatsApp en el chip → Dispositivos vinculados → Vincular con número de teléfono</p>
+    </body></html>`);
   } else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Hache Barber Servidor OK');
+    res.end('<html><body style="background:#000;color:#fff;font-family:sans-serif;text-align:center;padding-top:100px"><h1>⏳ Generando código... Recargá en unos segundos</h1></body></html>');
   }
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🌐 Servidor web corriendo en puerto ${PORT}`);
-  console.log(`📱 Para ver el QR entrá a la URL del servicio + /qr`);
+  console.log(`🌐 Servidor web en puerto ${PORT}`);
 });
 
 // ── Conectar WhatsApp ────────────────────────────────────────
@@ -82,31 +69,34 @@ async function conectarWA() {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, console),
     },
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     browser: ['Hache Barber', 'Chrome', '22.0'],
   });
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      qrActual = qr;
-      console.log('══════════════════════════════════════');
-      console.log('QR LISTO — Entrá a la URL + /qr para escanearlo');
-      console.log('══════════════════════════════════════');
+  // Pedir código de pairing cuando esté conectando
+  if (!state.creds.registered) {
+    setTimeout(async () => {
       try {
-        qrImagenBase64 = await qrcode.toDataURL(qr);
+        const codigo = await sock.requestPairingCode(NUMERO_CHIP);
+        codigoPairing = codigo;
+        console.log('══════════════════════════════════════');
+        console.log(`CÓDIGO DE VINCULACIÓN: ${codigo}`);
+        console.log('Abrí WhatsApp → Dispositivos vinculados → Vincular con número');
+        console.log('══════════════════════════════════════');
       } catch (e) {
-        console.log('Error generando imagen QR:', e.message);
+        console.log('Error pidiendo código:', e.message);
       }
-    }
+    }, 3000);
+  }
+
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect } = update;
 
     if (connection === 'close') {
       waListo = false;
-      qrActual = null;
-      qrImagenBase64 = null;
+      codigoPairing = null;
       const shouldReconnect = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
         : true;
@@ -116,8 +106,7 @@ async function conectarWA() {
       }
     } else if (connection === 'open') {
       waListo = true;
-      qrActual = null;
-      qrImagenBase64 = null;
+      codigoPairing = null;
       console.log('✅ WhatsApp conectado y listo');
       iniciarMotor();
     }
