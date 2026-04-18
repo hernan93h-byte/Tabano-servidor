@@ -36,8 +36,8 @@ let sock = null;
 let waListo = false;
 let codigoPairing = null;
 
-// Número del chip (sin + y sin espacios)
-const NUMERO_CHIP = '5492215869334';
+// Número del chip sin el 9 del medio
+const NUMERO_CHIP = '542215869334';
 
 // ── Servidor HTTP ────────────────────────────────────────────
 const server = http.createServer((req, res) => {
@@ -75,7 +75,6 @@ async function conectarWA() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // Pedir código de pairing cuando esté conectando
   if (!state.creds.registered) {
     setTimeout(async () => {
       try {
@@ -83,10 +82,10 @@ async function conectarWA() {
         codigoPairing = codigo;
         console.log('══════════════════════════════════════');
         console.log(`CÓDIGO DE VINCULACIÓN: ${codigo}`);
-        console.log('Abrí WhatsApp → Dispositivos vinculados → Vincular con número');
         console.log('══════════════════════════════════════');
       } catch (e) {
         console.log('Error pidiendo código:', e.message);
+        setTimeout(conectarWA, 5000);
       }
     }, 3000);
   }
