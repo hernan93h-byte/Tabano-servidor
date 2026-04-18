@@ -1,0 +1,17 @@
+{
+  "name": "hache-barber-servidor",
+  "version": "1.0.0",
+  "description": "Servidor de WhatsApp para Hache Barber",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0",
+    "firebase-admin": "^12.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
