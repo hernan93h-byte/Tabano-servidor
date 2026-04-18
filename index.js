@@ -1,15 +1,12 @@
 // ============================================================
 // SERVIDOR HACHE BARBER — Motor de WhatsApp
 // ============================================================
-// Lee la cola de mensajes de Firebase y los manda por WhatsApp
-// ============================================================
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const admin = require('firebase-admin');
 
 // ── Firebase Admin ──────────────────────────────────────────
-// Las credenciales vienen de variables de entorno en Railway
 const serviceAccount = {
   type: "service_account",
   project_id: process.env.FIREBASE_PROJECT_ID,
@@ -37,6 +34,7 @@ let waListo = false;
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'hache-barber' }),
   puppeteer: {
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -45,7 +43,11 @@ const client = new Client({
       '--no-first-run',
       '--no-zygote',
       '--single-process',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding'
     ]
   }
 });
@@ -60,7 +62,6 @@ client.on('qr', (qr) => {
 client.on('ready', () => {
   waListo = true;
   console.log('✅ WhatsApp conectado y listo');
-  // Arrancar el motor de cola
   iniciarMotor();
 });
 
@@ -74,9 +75,7 @@ client.initialize();
 // ── Motor principal ──────────────────────────────────────────
 function iniciarMotor() {
   console.log('🚀 Motor de cola iniciado');
-  // Revisar la cola cada 60 segundos
   setInterval(procesarCola, 60 * 1000);
-  // También procesar ahora mismo al arrancar
   procesarCola();
 }
 
@@ -89,7 +88,6 @@ async function procesarCola() {
   const ahora = Date.now();
 
   try {
-    // Buscar mensajes pendientes cuya hora programada ya pasó
     const snapshot = await db
       .collection('tabano-difusion-cola')
       .where('estado', '==', 'pendiente')
@@ -106,7 +104,6 @@ async function procesarCola() {
 
     for (const docSnap of snapshot.docs) {
       await procesarMensaje(docSnap);
-      // Esperar entre mensajes (delay anti-ban: entre 30 y 90 segundos)
       const delay = 30000 + Math.random() * 60000;
       await esperar(delay);
     }
@@ -122,18 +119,14 @@ async function procesarMensaje(docSnap) {
 
   console.log(`📤 Enviando a ${data.clienteNombre} (${data.clienteWA})`);
 
-  // Marcar como "enviando" para no procesarlo dos veces
   await db.collection('tabano-difusion-cola').doc(docId).update({
     estado: 'enviando'
   });
 
   try {
-    // Normalizar número: solo dígitos, agregar @c.us
     const numero = data.clienteWA.replace(/\D/g, '') + '@c.us';
-
     await client.sendMessage(numero, data.textoFinal);
 
-    // Mover al historial
     await db.collection('tabano-difusion-historial').add({
       clienteId: data.clienteId || '',
       clienteNombre: data.clienteNombre,
@@ -147,15 +140,11 @@ async function procesarMensaje(docSnap) {
       simulado: false
     });
 
-    // Borrar de la cola
     await db.collection('tabano-difusion-cola').doc(docId).delete();
-
     console.log(`✅ Enviado OK a ${data.clienteNombre}`);
 
   } catch (err) {
     console.error(`❌ Error enviando a ${data.clienteNombre}:`, err.message);
-
-    // Marcar como error en la cola
     await db.collection('tabano-difusion-cola').doc(docId).update({
       estado: 'error',
       intentos: (data.intentos || 0) + 1,
