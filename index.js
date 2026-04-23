@@ -3,13 +3,11 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 const fetch = require('node-fetch');
 
-// ─── CREDENCIALES ───────────────────────────────────────────
 const TELEGRAM_TOKEN = '8635626965:AAGtA8mKCx_8qt6kPRxE_qSBJ8c4JDDjvR0';
 const HERNAN_ID = '8412020074';
 const OPENROUTER_KEY = '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';
 const MODELO = 'x-ai/grok-3-mini';
 
-// ─── FIREBASE ───────────────────────────────────────────────
 initializeApp({
   credential: cert({
     projectId: "agenda-tabano",
@@ -19,179 +17,116 @@ initializeApp({
 });
 
 const db = getFirestore();
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { interval: 300, autoStart: true, params: { timeout: 10 } } });
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// ─── FUNCIÓN: formatear fecha ────────────────────────────────
-function formatearFecha(str) {
-  if (!str) return '';
+function formatearCuerpo(texto) {
+  if (!texto) return '';
   const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  let dia, mes;
-  if (str.includes('-')) {
-    const p = str.split('-');
-    dia = parseInt(p[2]); mes = parseInt(p[1]) - 1;
-  } else if (str.includes('/')) {
-    const p = str.split('/');
-    dia = parseInt(p[0]); mes = parseInt(p[1]) - 1;
-  } else { return str; }
-  if (isNaN(dia) || isNaN(mes)) return str;
-  return dia + ' de ' + meses[mes];
-}
-
-// ─── FUNCIÓN: formatear cuerpo de notif ─────────────────────
-function formatearCuerpo(cuerpo) {
-  if (!cuerpo) return '';
-  // Busca patrones de fecha tipo 2026-04-23 o 2026-04-23 19:00
-  return cuerpo.replace(/(\d{4})-(\d{2})-(\d{2})/g, (match, y, m, d) => {
-    const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  return texto.replace(/(\d{4})-(\d{2})-(\d{2})/g, function(match, y, m, d) {
     return parseInt(d) + ' de ' + meses[parseInt(m) - 1];
   });
 }
 
-// ─── FUNCIÓN: mandar mensaje a Hernán ───────────────────────
 async function notificar(texto) {
   try {
-    await bot.sendMessage(HERNAN_ID, texto, { parse_mode: 'Markdown' });
+    await bot.sendMessage(HERNAN_ID, texto);
   } catch (e) {
-    console.error('Error mandando mensaje:', e.message);
+    console.error('Error notificando:', e.message);
   }
 }
 
-// ─── FUNCIÓN: responder con IA ───────────────────────────────
 async function responderConIA(pregunta) {
   try {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${OPENROUTER_KEY}`,
+        'Authorization': 'Bearer ' + OPENROUTER_KEY,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         model: MODELO,
         messages: [
-          {
-            role: 'system',
-            content: 'Sos el asistente de Hernán, barbero. Respondé en castellano rioplatense, de forma breve y directa. Tu nombre es TabanoBot.'
-          },
+          { role: 'system', content: 'Sos el asistente de Hernan, barbero. Respondé en castellano rioplatense, breve y directo. Tu nombre es TabanoBot.' },
           { role: 'user', content: pregunta }
         ]
       })
     });
     const data = await res.json();
-    return data.choices?.[0]?.message?.content || 'No pude responder, intentá de nuevo.';
+    return data.choices[0].message.content;
   } catch (e) {
-    console.error('Error IA:', e.message);
-    return 'Hubo un error con la IA, intentá de nuevo.';
+    return 'Hubo un error, intentá de nuevo.';
   }
 }
 
-// ─── ESCUCHAR MENSAJES DE HERNÁN ─────────────────────────────
-bot.on('message', async (msg) => {
+bot.on('message', async function(msg) {
   if (String(msg.chat.id) !== HERNAN_ID) return;
-  const texto = msg.text;
-  if (!texto) return;
-
-  await bot.sendChatAction(HERNAN_ID, 'typing');
-  const respuesta = await responderConIA(texto);
+  if (!msg.text) return;
+  const respuesta = await responderConIA(msg.text);
   await notificar(respuesta);
 });
 
-// ─── ESCUCHAR: colección tabano-notif ────────────────────────
 let primeraVezNotif = true;
-db.collection('tabano-notif').onSnapshot(snapshot => {
+db.collection('tabano-notif').onSnapshot(function(snapshot) {
   if (primeraVezNotif) { primeraVezNotif = false; return; }
-  snapshot.docChanges().forEach(change => {
+  snapshot.docChanges().forEach(function(change) {
     if (change.type === 'added') {
       const d = change.doc.data();
-      const titulo = d.titulo || d.title || '🔔 Notificación';
-      const cuerpo = formatearCuerpo(d.cuerpo || d.body || d.mensaje || d.message || '');
-      notificar(`${titulo}\n${cuerpo}`);
+      const titulo = d.titulo || d.title || 'Notificacion';
+      const cuerpo = formatearCuerpo(d.cuerpo || d.body || d.mensaje || '');
+      notificar(titulo + '\n' + cuerpo);
     }
   });
 });
 
-// ─── ESCUCHAR: turnos nuevos (tabano/appts) ──────────────────
 let apptsPrevios = null;
-
-db.collection('tabano').doc('appts').onSnapshot(async snap => {
+db.collection('tabano').doc('appts').onSnapshot(function(snap) {
   const data = snap.data();
   if (!data) return;
-
   const turnos = data.list || data.turnos || [];
+  if (apptsPrevios === null) { apptsPrevios = turnos; return; }
 
-  if (apptsPrevios === null) {
-    apptsPrevios = turnos;
-    return;
-  }
+  const idsAnteriores = {};
+  apptsPrevios.forEach(function(t) { idsAnteriores[t.id] = true; });
+  const nuevos = turnos.filter(function(t) { return !idsAnteriores[t.id]; });
 
-  const idsAnteriores = new Set(apptsPrevios.map(t => t.id));
-  const nuevos = turnos.filter(t => !idsAnteriores.has(t.id));
-
-  for (const t of nuevos) {
+  nuevos.forEach(function(t) {
     const nombre = t.clienteNombre || t.nombre || 'Cliente';
-    const fecha = formatearFecha(t.fecha || '');
-    const hora = t.hora || '';
+    const cuerpo = formatearCuerpo((t.fecha || '') + ' ' + (t.hora || ''));
     const servicio = t.servicio || t.svc || '';
-    notificar(`📅 *Turno nuevo agendado*\n👤 ${nombre}\n🕐 ${fecha} ${hora}\n✂️ ${servicio}`);
-  }
-
-  const idsNuevos = new Set(turnos.map(t => t.id));
-  const cancelados = apptsPrevios.filter(t => !idsNuevos.has(t.id) && t.estado !== 'atendido');
-  for (const t of cancelados) {
-    const nombre = t.clienteNombre || t.nombre || 'Cliente';
-    const fecha = formatearFecha(t.fecha || '');
-    const hora = t.hora || '';
-    notificar(`❌ *Turno cancelado*\n👤 ${nombre}\n🕐 ${fecha} ${hora}`);
-  }
-
-  const porFechaHora = {};
-  for (const t of turnos) {
-    if (t.estado === 'cancelado') continue;
-    const clave = `${t.fecha}_${t.hora}`;
-    if (!porFechaHora[clave]) porFechaHora[clave] = [];
-    porFechaHora[clave].push(t);
-  }
-  for (const [clave, lista] of Object.entries(porFechaHora)) {
-    if (lista.length > 1) {
-      const [fecha, hora] = clave.split('_');
-      const nombres = lista.map(t => t.clienteNombre || t.nombre || '?').join(', ');
-      notificar(`⚠️ *Solapamiento de turnos*\n🕐 ${formatearFecha(fecha)} ${hora}\n👥 ${nombres}`);
-    }
-  }
+    notificar('Turno nuevo: ' + nombre + '\n' + cuerpo + '\n' + servicio);
+  });
 
   apptsPrevios = turnos;
 });
 
-// ─── ESCUCHAR: mensajes nuevos de clientes ───────────────────
 let primeraVezMsgs = true;
-db.collection('tabano-msgs').onSnapshot(snapshot => {
+db.collection('tabano-msgs').onSnapshot(function(snapshot) {
   if (primeraVezMsgs) { primeraVezMsgs = false; return; }
-  snapshot.docChanges().forEach(change => {
+  snapshot.docChanges().forEach(function(change) {
     if (change.type === 'added') {
       const d = change.doc.data();
-      if (d.de === 'hernán' || d.de === 'hernan' || d.sender === 'barber') return;
+      if (d.de === 'hernan' || d.sender === 'barber') return;
       const nombre = d.clienteNombre || d.nombre || 'Cliente';
-      const msg = d.texto || d.message || d.msg || '(sin texto)';
-      notificar(`💬 *Mensaje nuevo*\n👤 ${nombre}\n"${msg}"`);
+      const msg = d.texto || d.message || '';
+      notificar('Mensaje de ' + nombre + ': ' + msg);
     }
   });
 });
 
-// ─── ESCUCHAR: clientes nuevos ───────────────────────────────
 let primeraVezRegistros = true;
-db.collection('tabano-registros').onSnapshot(snapshot => {
+db.collection('tabano-registros').onSnapshot(function(snapshot) {
   if (primeraVezRegistros) { primeraVezRegistros = false; return; }
-  snapshot.docChanges().forEach(change => {
+  snapshot.docChanges().forEach(function(change) {
     if (change.type === 'added') {
       const d = change.doc.data();
       const nombre = d.nombre || d.name || 'Nuevo cliente';
-      notificar(`👤 *Cliente nuevo en la app*\n${nombre} se registró recién.`);
+      notificar('Cliente nuevo en la app: ' + nombre);
     }
   });
 });
 
-process.once("SIGTERM", () => { bot.stopPolling(); process.exit(0); });
-process.once("SIGINT", () => { bot.stopPolling(); process.exit(0); });
+process.once('SIGTERM', function() { bot.stopPolling(); process.exit(0); });
+process.once('SIGINT', function() { bot.stopPolling(); process.exit(0); });
 
-console.log("🦞 TabanoBot arrancó correctamente');
-notificar('🦞 *TabanoBot online*\nEstoy escuchando todo. Te aviso de cualquier novedad.');
-      
+console.log('TabanoBot arranco correctamente');
+notificar('TabanoBot online. Estoy escuchando todo.');
