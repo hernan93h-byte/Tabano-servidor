@@ -19,7 +19,33 @@ initializeApp({
 });
 
 const db = getFirestore();
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: { interval: 300, autoStart: true, params: { timeout: 10 } } });
+
+// ─── FUNCIÓN: formatear fecha ────────────────────────────────
+function formatearFecha(str) {
+  if (!str) return '';
+  const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  let dia, mes;
+  if (str.includes('-')) {
+    const p = str.split('-');
+    dia = parseInt(p[2]); mes = parseInt(p[1]) - 1;
+  } else if (str.includes('/')) {
+    const p = str.split('/');
+    dia = parseInt(p[0]); mes = parseInt(p[1]) - 1;
+  } else { return str; }
+  if (isNaN(dia) || isNaN(mes)) return str;
+  return dia + ' de ' + meses[mes];
+}
+
+// ─── FUNCIÓN: formatear cuerpo de notif ─────────────────────
+function formatearCuerpo(cuerpo) {
+  if (!cuerpo) return '';
+  // Busca patrones de fecha tipo 2026-04-23 o 2026-04-23 19:00
+  return cuerpo.replace(/(\d{4})-(\d{2})-(\d{2})/g, (match, y, m, d) => {
+    const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+    return parseInt(d) + ' de ' + meses[parseInt(m) - 1];
+  });
+}
 
 // ─── FUNCIÓN: mandar mensaje a Hernán ───────────────────────
 async function notificar(texto) {
@@ -70,17 +96,15 @@ bot.on('message', async (msg) => {
 });
 
 // ─── ESCUCHAR: colección tabano-notif ────────────────────────
+let primeraVezNotif = true;
 db.collection('tabano-notif').onSnapshot(snapshot => {
+  if (primeraVezNotif) { primeraVezNotif = false; return; }
   snapshot.docChanges().forEach(change => {
     if (change.type === 'added') {
       const d = change.doc.data();
-      // Solo notificar docs nuevos (últimos 10 segundos)
-      const ahora = Date.now();
-      const ts = d.ts || d.timestamp?.toMillis?.() || 0;
-      if (ahora - ts > 10000) return;
-
-      const msg = d.mensaje || d.message || d.texto || d.title || '🔔 Nueva notificación';
-      notificar(`🔔 *Notificación*\n${msg}`);
+      const titulo = d.titulo || d.title || '🔔 Notificación';
+      const cuerpo = formatearCuerpo(d.cuerpo || d.body || d.mensaje || d.message || '');
+      notificar(`${titulo}\n${cuerpo}`);
     }
   });
 });
@@ -99,29 +123,26 @@ db.collection('tabano').doc('appts').onSnapshot(async snap => {
     return;
   }
 
-  // Detectar turnos nuevos
   const idsAnteriores = new Set(apptsPrevios.map(t => t.id));
   const nuevos = turnos.filter(t => !idsAnteriores.has(t.id));
 
   for (const t of nuevos) {
     const nombre = t.clienteNombre || t.nombre || 'Cliente';
-    const fecha = t.fecha || '';
+    const fecha = formatearFecha(t.fecha || '');
     const hora = t.hora || '';
     const servicio = t.servicio || t.svc || '';
     notificar(`📅 *Turno nuevo agendado*\n👤 ${nombre}\n🕐 ${fecha} ${hora}\n✂️ ${servicio}`);
   }
 
-  // Detectar cancelaciones
   const idsNuevos = new Set(turnos.map(t => t.id));
   const cancelados = apptsPrevios.filter(t => !idsNuevos.has(t.id) && t.estado !== 'atendido');
   for (const t of cancelados) {
     const nombre = t.clienteNombre || t.nombre || 'Cliente';
-    const fecha = t.fecha || '';
+    const fecha = formatearFecha(t.fecha || '');
     const hora = t.hora || '';
     notificar(`❌ *Turno cancelado*\n👤 ${nombre}\n🕐 ${fecha} ${hora}`);
   }
 
-  // Detectar solapamientos
   const porFechaHora = {};
   for (const t of turnos) {
     if (t.estado === 'cancelado') continue;
@@ -133,7 +154,7 @@ db.collection('tabano').doc('appts').onSnapshot(async snap => {
     if (lista.length > 1) {
       const [fecha, hora] = clave.split('_');
       const nombres = lista.map(t => t.clienteNombre || t.nombre || '?').join(', ');
-      notificar(`⚠️ *Solapamiento de turnos*\n🕐 ${fecha} ${hora}\n👥 ${nombres}`);
+      notificar(`⚠️ *Solapamiento de turnos*\n🕐 ${formatearFecha(fecha)} ${hora}\n👥 ${nombres}`);
     }
   }
 
@@ -141,15 +162,13 @@ db.collection('tabano').doc('appts').onSnapshot(async snap => {
 });
 
 // ─── ESCUCHAR: mensajes nuevos de clientes ───────────────────
+let primeraVezMsgs = true;
 db.collection('tabano-msgs').onSnapshot(snapshot => {
+  if (primeraVezMsgs) { primeraVezMsgs = false; return; }
   snapshot.docChanges().forEach(change => {
     if (change.type === 'added') {
       const d = change.doc.data();
-      const ahora = Date.now();
-      const ts = d.ts || d.timestamp?.toMillis?.() || 0;
-      if (ahora - ts > 10000) return;
       if (d.de === 'hernán' || d.de === 'hernan' || d.sender === 'barber') return;
-
       const nombre = d.clienteNombre || d.nombre || 'Cliente';
       const msg = d.texto || d.message || d.msg || '(sin texto)';
       notificar(`💬 *Mensaje nuevo*\n👤 ${nombre}\n"${msg}"`);
@@ -158,20 +177,21 @@ db.collection('tabano-msgs').onSnapshot(snapshot => {
 });
 
 // ─── ESCUCHAR: clientes nuevos ───────────────────────────────
+let primeraVezRegistros = true;
 db.collection('tabano-registros').onSnapshot(snapshot => {
+  if (primeraVezRegistros) { primeraVezRegistros = false; return; }
   snapshot.docChanges().forEach(change => {
     if (change.type === 'added') {
       const d = change.doc.data();
-      const ahora = Date.now();
-      const ts = d.ts || d.timestamp?.toMillis?.() || 0;
-      if (ahora - ts > 10000) return;
-
       const nombre = d.nombre || d.name || 'Nuevo cliente';
       notificar(`👤 *Cliente nuevo en la app*\n${nombre} se registró recién.`);
     }
   });
 });
 
-console.log('🦞 TabanoBot arrancó correctamente');
+process.once("SIGTERM", () => { bot.stopPolling(); process.exit(0); });
+process.once("SIGINT", () => { bot.stopPolling(); process.exit(0); });
+
+console.log("🦞 TabanoBot arrancó correctamente');
 notificar('🦞 *TabanoBot online*\nEstoy escuchando todo. Te aviso de cualquier novedad.');
-    
+      
