@@ -1,19 +1,14 @@
 {
-  "name": "hache-barber-servidor",
+  "name": "tabano-servidor",
   "version": "1.0.0",
-  "description": "Servidor de WhatsApp para Hache Barber",
+  "description": "TabanoBot — Notificaciones Telegram para Hache Barber",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.0",
-    "@hapi/boom": "^10.0.1",
-    "qrcode": "^1.5.3",
-    "qrcode-terminal": "^0.12.0",
-    "firebase-admin": "^12.0.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "firebase-admin": "^12.0.0",
+    "node-fetch": "^2.7.0",
+    "node-telegram-bot-api": "^0.64.0"
   }
 }
