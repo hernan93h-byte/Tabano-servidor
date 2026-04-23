@@ -70,19 +70,17 @@ bot.on('message', async (msg) => {
 });
 
 // ─── ESCUCHAR: colección tabano-notif ────────────────────────
-let primeraVezNotif = true;
 db.collection('tabano-notif').onSnapshot(snapshot => {
-  // La primera vez que arranca, ignorar todos los docs existentes
-  if (primeraVezNotif) {
-    primeraVezNotif = false;
-    return;
-  }
   snapshot.docChanges().forEach(change => {
     if (change.type === 'added') {
       const d = change.doc.data();
-      const titulo = d.titulo || d.title || '🔔 Notificación';
-      const cuerpo = d.cuerpo || d.body || d.mensaje || d.message || '';
-      notificar(`${titulo}\n${cuerpo}`);
+      // Solo notificar docs nuevos (últimos 10 segundos)
+      const ahora = Date.now();
+      const ts = d.ts || d.timestamp?.toMillis?.() || 0;
+      if (ahora - ts > 10000) return;
+
+      const msg = d.mensaje || d.message || d.texto || d.title || '🔔 Nueva notificación';
+      notificar(`🔔 *Notificación*\n${msg}`);
     }
   });
 });
@@ -143,13 +141,15 @@ db.collection('tabano').doc('appts').onSnapshot(async snap => {
 });
 
 // ─── ESCUCHAR: mensajes nuevos de clientes ───────────────────
-let primeraVezMsgs = true;
 db.collection('tabano-msgs').onSnapshot(snapshot => {
-  if (primeraVezMsgs) { primeraVezMsgs = false; return; }
   snapshot.docChanges().forEach(change => {
     if (change.type === 'added') {
       const d = change.doc.data();
+      const ahora = Date.now();
+      const ts = d.ts || d.timestamp?.toMillis?.() || 0;
+      if (ahora - ts > 10000) return;
       if (d.de === 'hernán' || d.de === 'hernan' || d.sender === 'barber') return;
+
       const nombre = d.clienteNombre || d.nombre || 'Cliente';
       const msg = d.texto || d.message || d.msg || '(sin texto)';
       notificar(`💬 *Mensaje nuevo*\n👤 ${nombre}\n"${msg}"`);
@@ -158,12 +158,14 @@ db.collection('tabano-msgs').onSnapshot(snapshot => {
 });
 
 // ─── ESCUCHAR: clientes nuevos ───────────────────────────────
-let primeraVezRegistros = true;
 db.collection('tabano-registros').onSnapshot(snapshot => {
-  if (primeraVezRegistros) { primeraVezRegistros = false; return; }
   snapshot.docChanges().forEach(change => {
     if (change.type === 'added') {
       const d = change.doc.data();
+      const ahora = Date.now();
+      const ts = d.ts || d.timestamp?.toMillis?.() || 0;
+      if (ahora - ts > 10000) return;
+
       const nombre = d.nombre || d.name || 'Nuevo cliente';
       notificar(`👤 *Cliente nuevo en la app*\n${nombre} se registró recién.`);
     }
@@ -172,4 +174,4 @@ db.collection('tabano-registros').onSnapshot(snapshot => {
 
 console.log('🦞 TabanoBot arrancó correctamente');
 notificar('🦞 *TabanoBot online*\nEstoy escuchando todo. Te aviso de cualquier novedad.');
-                
+    
