@@ -350,6 +350,10 @@ db.collection('tabano-registros').onSnapshot(function(snapshot) {
   });
 });
 
+// Servidor HTTP para que Render no mate el proceso por inactividad
+const http = require('http');
+http.createServer(function(req, res) { res.end('ok'); }).listen(process.env.PORT || 3000);
+
 process.once('SIGTERM', function() { bot.stopPolling(); process.exit(0); });
 process.once('SIGINT', function() { bot.stopPolling(); process.exit(0); });
 
